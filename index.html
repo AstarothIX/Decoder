@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>PGP Mesaj Çözücü</title>
+<title>Şifreleme Araçları</title>
 <script src="https://unpkg.com/openpgp@5.11.2/dist/openpgp.min.js"></script>
 <script>
   // Fallback CDN in case unpkg is blocked/unreachable
@@ -114,6 +114,30 @@
   .mode-section { display: none; }
   .mode-section.active { display: block; }
 
+  .tool-tabs {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 24px;
+    background: #0a0e14;
+    border-radius: 10px;
+    padding: 4px;
+    border: 1px solid var(--border);
+  }
+  .tool-tab {
+    flex: 1;
+    text-align: center;
+    padding: 12px 8px;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--muted);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all .15s;
+  }
+  .tool-tab.active { background: var(--accent-dim); color: #fff; }
+  .tool-panel { display: none; }
+  .tool-panel.active { display: block; }
+
   button {
     width: 100%;
     background: linear-gradient(135deg, var(--accent) 0%, var(--accent-dim) 100%);
@@ -182,10 +206,16 @@
 <div class="wrap">
   <header>
     <div class="lock">◆ ŞİFRELİ ◆</div>
-    <h1>PGP Mesaj Çözücü</h1>
+    <h1>Şifreleme Araçları</h1>
     <div id="libWarning" style="display:none; color:#f47067; font-size:12px; margin-top:8px;"></div>
   </header>
 
+  <div class="tool-tabs">
+    <div class="tool-tab active" data-tool="pgp">PGP Mesaj Çözücü</div>
+    <div class="tool-tab" data-tool="b64vig">Base64 + Vigenère</div>
+  </div>
+
+  <div class="tool-panel active" id="tool-pgp">
   <div class="panel">
     <div class="field">
       <label for="cipherInput">Şifreli Mesaj (PGP MESSAGE bloğu veya sadece kod)</label>
@@ -225,12 +255,59 @@
   </div>
 
   <footer>
+    Bu araç openpgp.js kullanır ve tüm çözme işlemi cihazında, çevrimdışı olarak gerçekleşir.<br>
     Parolan veya private key'in hiçbir yere gönderilmez.
   </footer>
+  </div>
+
+  <div class="tool-panel" id="tool-b64vig">
+  <div class="panel">
+    <div class="tabs">
+      <div class="tab vtab active" data-vmode="decode">Çöz (Base64 → Vigenère)</div>
+      <div class="tab vtab" data-vmode="encode">Şifrele (Vigenère → Base64)</div>
+    </div>
+
+    <div class="field">
+      <label id="vigInputLabel" for="vigInputText">Metin</label>
+      <textarea id="vigInputText" placeholder="Metni buraya yaz veya yapıştır" style="min-height: 120px;"></textarea>
+    </div>
+
+    <div class="field">
+      <label for="vigKeyInput">Anahtar Kelime</label>
+      <input type="text" id="vigKeyInput" placeholder="Şifreleme parolası">
+    </div>
+
+    <div class="field" style="margin-top: 4px;">
+      <button id="vigRunBtn">Çalıştır</button>
+    </div>
+
+    <div class="status-line" id="vigStatusLine"></div>
+    <div class="error-box" id="vigErrorBox"></div>
+    <div class="result-box" id="vigResultBox"></div>
+  </div>
+
+  <footer>
+    Şifreleme modu: metni önce Vigenère ile şifreler, sonra Base64'e çevirir.<br>
+    Çözme modu: önce Base64'ten çözer, sonra Vigenère ile açar. Anahtar kelimeyi kullanıcı belirler.
+  </footer>
+  </div>
 </div>
 
 <script>
-const tabs = document.querySelectorAll('.tab');
+// Top-level tool switcher
+const toolTabs = document.querySelectorAll('.tool-tab');
+const toolPanels = document.querySelectorAll('.tool-panel');
+toolTabs.forEach(tt => {
+  tt.addEventListener('click', () => {
+    toolTabs.forEach(t => t.classList.remove('active'));
+    toolPanels.forEach(p => p.classList.remove('active'));
+    tt.classList.add('active');
+    document.getElementById('tool-' + tt.dataset.tool).classList.add('active');
+  });
+});
+
+// PGP tool's password/key sub-tabs (scoped to the PGP panel only)
+const tabs = document.querySelectorAll('#tool-pgp .tab');
 const sections = document.querySelectorAll('.mode-section');
 tabs.forEach(tab => {
   tab.addEventListener('click', () => {
@@ -330,6 +407,122 @@ document.getElementById('decryptBtn').addEventListener('click', async () => {
 document.getElementById('cipherInput').addEventListener('input', hideMessages);
 document.getElementById('passInput').addEventListener('input', hideMessages);
 document.getElementById('privKeyInput').addEventListener('input', hideMessages);
+
+// ---- Base64 + Vigenère tool ----
+const vtabs = document.querySelectorAll('.vtab');
+const vigInputLabel = document.getElementById('vigInputLabel');
+const vigInputText = document.getElementById('vigInputText');
+
+function hideVigMessages() {
+  document.getElementById('vigErrorBox').style.display = 'none';
+  document.getElementById('vigResultBox').style.display = 'none';
+  document.getElementById('vigStatusLine').textContent = '';
+}
+
+vtabs.forEach(tab => {
+  tab.addEventListener('click', () => {
+    vtabs.forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    hideVigMessages();
+    if (tab.dataset.vmode === 'encode') {
+      vigInputLabel.textContent = 'Metin (düz yazı)';
+      vigInputText.placeholder = 'Şifrelenecek düz metni yaz';
+    } else {
+      vigInputLabel.textContent = 'Base64 Kod';
+      vigInputText.placeholder = 'Çözülecek Base64 kodunu yapıştır';
+    }
+  });
+});
+
+function vigenereEncode(text, key) {
+  key = key.toLowerCase().replace(/[^a-z]/g, '');
+  if (!key) throw new Error('Anahtar kelime en az bir harf içermeli.');
+  let result = '';
+  let ki = 0;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    const code = ch.toLowerCase().charCodeAt(0);
+    if (code >= 97 && code <= 122) {
+      const keyShift = key.charCodeAt(ki % key.length) - 97;
+      const base = code - 97;
+      const shifted = (base + keyShift) % 26;
+      const outCh = String.fromCharCode(shifted + 97);
+      result += (ch === ch.toUpperCase()) ? outCh.toUpperCase() : outCh;
+      ki++;
+    } else {
+      result += ch;
+    }
+  }
+  return result;
+}
+
+function vigenereDecode(text, key) {
+  key = key.toLowerCase().replace(/[^a-z]/g, '');
+  if (!key) throw new Error('Anahtar kelime en az bir harf içermeli.');
+  let result = '';
+  let ki = 0;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    const code = ch.toLowerCase().charCodeAt(0);
+    if (code >= 97 && code <= 122) {
+      const keyShift = key.charCodeAt(ki % key.length) - 97;
+      const base = code - 97;
+      const shifted = ((base - keyShift) % 26 + 26) % 26;
+      const outCh = String.fromCharCode(shifted + 97);
+      result += (ch === ch.toUpperCase()) ? outCh.toUpperCase() : outCh;
+      ki++;
+    } else {
+      result += ch;
+    }
+  }
+  return result;
+}
+
+document.getElementById('vigRunBtn').addEventListener('click', () => {
+  hideVigMessages();
+  const errorBox = document.getElementById('vigErrorBox');
+  const resultBox = document.getElementById('vigResultBox');
+  const statusLine = document.getElementById('vigStatusLine');
+  const mode = document.querySelector('.vtab.active').dataset.vmode;
+  const key = document.getElementById('vigKeyInput').value.trim();
+  const raw = vigInputText.value;
+
+  if (!raw.trim()) {
+    errorBox.textContent = 'Lütfen metni gir.';
+    errorBox.style.display = 'block';
+    return;
+  }
+  if (!key) {
+    errorBox.textContent = 'Lütfen anahtar kelimeyi gir.';
+    errorBox.style.display = 'block';
+    return;
+  }
+
+  try {
+    let output;
+    if (mode === 'encode') {
+      statusLine.textContent = 'Vigenère ile şifreleniyor...';
+      const vig = vigenereEncode(raw, key);
+      statusLine.textContent = 'Base64\'e çevriliyor...';
+      output = btoa(unescape(encodeURIComponent(vig)));
+    } else {
+      statusLine.textContent = 'Base64 çözülüyor...';
+      const b64decoded = decodeURIComponent(escape(atob(raw.trim())));
+      statusLine.textContent = 'Vigenère ile çözülüyor...';
+      output = vigenereDecode(b64decoded, key);
+    }
+    resultBox.textContent = output;
+    resultBox.style.display = 'block';
+    statusLine.textContent = '✓ Tamamlandı';
+  } catch (err) {
+    errorBox.textContent = 'Hata: ' + (err.message || 'İşlem başarısız. Girdiyi kontrol et.');
+    errorBox.style.display = 'block';
+    statusLine.textContent = '';
+  }
+});
+
+vigInputText.addEventListener('input', hideVigMessages);
+document.getElementById('vigKeyInput').addEventListener('input', hideVigMessages);
 </script>
 </body>
 </html>
